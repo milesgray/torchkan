@@ -1,3 +1,4 @@
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -23,7 +24,8 @@ class LKAN(nn.Module):
     """
     def __init__(
         self,
-        units,
+        in_features,
+        out_features,
         grid_size=3,
         spline_order=3,
         base_activation='silu',
@@ -33,7 +35,8 @@ class LKAN(nn.Module):
         use_layernorm=True,
     ):
         super().__init__()
-        self.units = units
+        self.in_features = in_features
+        self.out_features = out_features
         self.grid_size = grid_size
         self.spline_order = spline_order
         self.base_activation = getattr(F, base_activation)
@@ -42,14 +45,9 @@ class LKAN(nn.Module):
         self.use_layernorm = use_layernorm
         
         if self.use_layernorm:
-            self.layer_norm = nn.LayerNorm(None)  # None will be replaced in forward pass
+            self.layer_norm = nn.LayerNorm(self.in_features)  # None will be replaced in forward pass
 
         self.dropout = nn.Dropout(dropout)
-
-    def build(self, input_shape):
-        self.in_features = input_shape[-1]
-        self.other_dims = input_shape[1:-1]
-
         self.grid = nn.Parameter(
             GridInitializer(self.grid_range, self.grid_size, self.spline_order)(
                 [1, self.in_features, self.grid_size + 2 * self.spline_order + 1]
@@ -57,35 +55,35 @@ class LKAN(nn.Module):
             requires_grad=False
         )
 
-        self.base_weight = nn.Parameter(torch.Tensor(self.units, self.in_features))
+        self.base_weight = nn.Parameter(torch.Tensor(self.in_features, self.in_features))
         nn.init.kaiming_uniform_(self.base_weight, a=math.sqrt(5))
 
         if self.use_bias:
-            self.base_bias = nn.Parameter(torch.zeros(self.units))
+            self.base_bias = nn.Parameter(torch.zeros(self.in_features))
 
-        self.spline_weight = nn.Parameter(torch.Tensor(self.units, self.in_features * (self.grid_size + self.spline_order)))
+        self.spline_weight = nn.Parameter(torch.Tensor(self.in_features, 
+                                                       self.in_features * (self.grid_size + self.spline_order)))
         nn.init.kaiming_uniform_(self.spline_weight, a=math.sqrt(5))
 
-    def forward(self, x):
-        if not hasattr(self, 'base_weight'):
-            self.build(x.size())
-        
-        if self.use_layernorm:
-            if self.layer_norm.normalized_shape != x.size()[1:]:
-                self.layer_norm = nn.LayerNorm(x.size()[1:]).to(x.device)
+    def forward(self, x):        
+        if self.use_layernorm:           
             x = self.layer_norm(x)
         
-        base_output = F.linear(self.base_activation(x), self.base_weight.t(), self.base_bias if self.use_bias else None)
-        spline_output = torch.matmul(self.b_splines(x), self.spline_weight.t())
+        base_output = F.linear(self.base_activation(x), 
+                               self.base_weight.t(), 
+                               self.base_bias if self.use_bias else None)
+        spline_output = torch.matmul(self.b_splines(x), 
+                                     self.spline_weight.t())
         
         return self.dropout(base_output) + self.dropout(spline_output)
 
     def b_splines(self, x):
         batch_size = x.size(0)
+        other_dims = x.shape[1:-1]
         x_expanded = x.unsqueeze(-1)
         
         grid_expanded = self.grid.expand(batch_size, self.in_features, -1)
-        for dim in reversed(self.other_dims):
+        for dim in reversed(other_dims):
             grid_expanded = grid_expanded.unsqueeze(1).expand(-1, dim, -1, -1)
 
         bases = ((x_expanded >= grid_expanded[..., :-1]) & (x_expanded < grid_expanded[..., 1:])).float()

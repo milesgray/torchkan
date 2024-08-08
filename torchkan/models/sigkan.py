@@ -3,8 +3,9 @@ import torch.nn as nn
 
 import iisignature  # Assuming there's a PyTorch version of iisignature
 
-from sigkan import LKAN, GRKAN, GRN  # Assuming these have been converted to PyTorch as well
-from layers.sig import SigLayer
+from .gr_kan import GRKAN, GRN  # Assuming these have been converted to PyTorch as well
+from .lkan import LKAN
+from ..layers.sig import SigLayer
 
 class SigKAN(nn.Module):
     def __init__(self, unit, sig_level, dropout=0.):

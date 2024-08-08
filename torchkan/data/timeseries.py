@@ -3,6 +3,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+import torch
+from torch.utils.data import DataLoader
 
 class MinMaxScaler:
     def __init__(self, feature_axis=None, minmax_range=(0, 1)):
@@ -75,8 +77,11 @@ class MinMaxScaler:
         X = X * self.scale_ + self.min_
         return X
 
+def to_tensor(data, dtype=torch.float32):
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    return torch.tensor(data, dtype=dtype).to(device)
 
-def load(path="data.parquet"):
+def load_crypto(path="data.parquet"):
     df = pd.read_parquet(path)
     df = df[(df.index >= pd.Timestamp('2020-01-01')) & (df.index < pd.Timestamp('2023-01-01'))]
     assets = ['BTC', 'ETH', 'ADA', 'XMR', 'EOS', 'MATIC', 'TRX', 'FTM', 'BNB', 'XLM', 'ENJ', 'CHZ', 'BUSD', 'ATOM', 'LINK', 'ETC', 'XRP', 'BCH', 'LTC']
@@ -84,7 +89,7 @@ def load(path="data.parquet"):
     df.columns = [c.replace(' quote asset volume', '') for c in df.columns]
     return df
 
-def generate_data(df, sequence_length, n_ahead = 1):
+def generate(df, sequence_length, n_ahead = 1):
     #Case without known inputs
     scaler_df = df.copy().shift(n_ahead).rolling(24 * 14).median()
     tmp_df = df.copy() / scaler_df
@@ -92,8 +97,7 @@ def generate_data(df, sequence_length, n_ahead = 1):
     scaler_df = scaler_df.iloc[24 * 14 + n_ahead:].fillna(0.)
     def prepare_sequences(df, scaler_df, n_history, n_future):
         X, y, y_scaler = [], [], []
-        num_features = df.shape[1]
-        
+
         # Iterate through the DataFrame to create sequences
         for i in range(n_history, len(df) - n_future + 1):
             # Extract the sequence of past observations
@@ -116,13 +120,75 @@ def generate_data(df, sequence_length, n_ahead = 1):
     
     # Generate the data
     X_scaler = MinMaxScaler(feature_axis=2)
-    X_train = X_scaler.fit_transform(X_train_unscaled)
-    X_test = X_scaler.transform(X_test_unscaled)
+    X_train = to_tensor(X_scaler.fit_transform(X_train_unscaled))
+    X_test = to_tensor(X_scaler.transform(X_test_unscaled))
     
     y_scaler = MinMaxScaler(feature_axis=2)
-    y_train = y_scaler.fit_transform(y_train_unscaled)
-    y_test = y_scaler.transform(y_test_unscaled)
+    y_train = to_tensor(y_scaler.fit_transform(y_train_unscaled))
+    y_test = to_tensor(y_scaler.transform(y_test_unscaled))
     
-    y_train = y_train.reshape(y_train.shape[0], -1) 
-    y_test = y_test.reshape(y_test.shape[0], -1)
-    return X_scaler, X_train, X_test, X_train_unscaled, X_test_unscaled, y_scaler, y_train, y_test, y_train_unscaled, y_test_unscaled, y_scaler_train, y_scaler_test
+    y_train = to_tensor(y_train.reshape(y_train.shape[0], -1))
+    y_test = to_tensor(y_test.reshape(y_test.shape[0], -1))    
+
+    return X_scaler, X_train, X_test, \
+        X_train_unscaled, X_test_unscaled, \
+            y_scaler, y_train, y_test, \
+                y_train_unscaled, y_test_unscaled, \
+                    y_scaler_train, y_scaler_test
+
+
+def generate_data_w_known_inputs(
+        df: pd.DataFrame, 
+        known_input_df: pd.DataFrame, 
+        sequence_length: int, 
+        n_ahead: int = 1
+) -> tuple:
+    #Case without known inputs - fill with 0 the unknown features future values in X
+    scaler_df = df.copy().shift(n_ahead).rolling(24 * 14).median()
+    tmp_df = df.copy() / scaler_df
+    tmp_df = tmp_df.iloc[24 * 14 + n_ahead:].fillna(0.)
+    scaler_df = scaler_df.iloc[24 * 14 + n_ahead:].fillna(0.)
+    tmp_known_input_df = known_input_df.iloc[24 * 14 + n_ahead:].copy()
+    
+    def prepare_sequences(df, known_input_df, scaler_df, n_history, n_future):
+        Xu, Xk, y, y_scaler = [], [], [], []
+        
+        # Iterate through the DataFrame to create sequences
+        for i in range(n_history, len(df) - n_future + 1):
+            # Extract the sequence of past observations
+            Xu.append(np.concatenate((df.iloc[i - n_history:i].values, np.zeros((n_future, df.shape[1]))), axis=0))
+            Xk.append(known_input_df.iloc[i - n_history:i+n_future].values)
+            # Extract the future values of the first column
+            y.append(df.iloc[i:i + n_future,0:1].values)
+            y_scaler.append(scaler_df.iloc[i:i + n_future,0:1].values)
+        
+        Xu, Xk, y, y_scaler = np.array(Xu), np.array(Xk), np.array(y), np.array(y_scaler)
+        return Xu, Xk, y, y_scaler
+    
+    # Prepare sequences
+    Xu, Xk, y, y_scaler = prepare_sequences(tmp_df, tmp_known_input_df, scaler_df, sequence_length, n_ahead)
+
+    X = np.concatenate((Xu, Xk), axis=-1)
+    
+    # Split the dataset into training and testing sets
+    train_test_separation = int(len(X) * 0.8)
+    X_train_unscaled, X_test_unscaled = X[:train_test_separation], X[train_test_separation:]
+    y_train_unscaled, y_test_unscaled = y[:train_test_separation], y[train_test_separation:]
+    y_scaler_train, y_scaler_test = y_scaler[:train_test_separation], y_scaler[train_test_separation:]
+    
+    # Generate the data
+    X_scaler = MinMaxScaler(feature_axis=2)
+    X_train = to_tensor(X_scaler.fit_transform(X_train_unscaled))
+    X_test = to_tensor(X_scaler.transform(X_test_unscaled))
+    
+    y_scaler = MinMaxScaler(feature_axis=2)
+    y_train = to_tensor(y_scaler.fit_transform(y_train_unscaled))
+    y_test = to_tensor(y_scaler.transform(y_test_unscaled))
+    
+    y_train = to_tensor(y_train.reshape(y_train.shape[0], -1))
+    y_test = to_tensor(y_test.reshape(y_test.shape[0], -1))
+    return X_scaler, X_train, X_test, \
+        X_train_unscaled, X_test_unscaled, \
+            y_scaler, y_train, y_test, \
+                y_train_unscaled, y_test_unscaled, \
+                    y_scaler_train, y_scaler_test

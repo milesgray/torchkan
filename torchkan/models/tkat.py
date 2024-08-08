@@ -2,12 +2,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from tkan import TKAN
+from .tkan import TKAN
 
 class AddAndNorm(nn.Module):
-    def __init__(self):
+    def __init__(self, size):
         super().__init__()
-        self.norm_layer = nn.LayerNorm(None)  # None will be replaced with actual size during forward pass
+        self.norm_layer = nn.LayerNorm(size)  # None will be replaced with actual size during forward pass
     
     def forward(self, inputs):
         tmp = torch.add(*inputs)
@@ -19,6 +19,7 @@ class Gate(nn.Module):
         self.hidden_layer_size = hidden_layer_size
         
     def build(self, input_shape):
+        print(f"[Gate] build; {input_shape}")
         if self.hidden_layer_size is None:
             self.hidden_layer_size = input_shape[-1]
         self.dense_layer = nn.Linear(input_shape[-1], self.hidden_layer_size)
@@ -44,7 +45,7 @@ class GRN(nn.Module):
         )
         self.hidden_layer_2 = nn.Linear(hidden_layer_size, hidden_layer_size)
         self.gate_layer = Gate(self.output_size)
-        self.add_and_norm_layer = AddAndNorm()
+        self.add_and_norm_layer = AddAndNorm(self.output_size)
 
     def forward(self, inputs):
         skip = self.skip_layer(inputs)
@@ -88,7 +89,7 @@ class RecurrentLayer(nn.Module):
         super().__init__()
         self.return_state = return_state
         if use_tkan:
-            self.layer = TKAN(num_units, batch_first=True)  # Assuming TKAN is implemented
+            self.layer = TKAN(num_units, num_units)
         else:
             self.layer = nn.LSTM(num_units, num_units, batch_first=True)
 
@@ -101,36 +102,48 @@ class RecurrentLayer(nn.Module):
             return output
 
 class EmbeddingLayer(nn.Module):
-    def __init__(self, num_hidden):
+    def __init__(self, input_size, output_size, num_features):
         super().__init__()
-        self.num_hidden = num_hidden
+        self.input_size = input_size
+        self.output_size = output_size
+        self.num_features = num_features
+        
+        self.dense_layers = nn.ModuleList([
+            nn.Linear(1, self.output_size) 
+            for _ in range(num_features)
+        ])
 
-    def build(self, input_shape):
-        self.dense_layers = nn.ModuleList([nn.Linear(1, self.num_hidden) for _ in range(input_shape[-1])])
+    def forward(self, x):
+        shape = x.shape
 
-    def forward(self, inputs):
-        if not hasattr(self, 'dense_layers'):
-            self.build(inputs.size())
-        embeddings = [dense_layer(inputs[:, :, i:i+1]) for i, dense_layer in enumerate(self.dense_layers)]
+        embeddings = [dense_layer(x_slice) for i, (dense_layer, x_slice) in enumerate(zip(self.dense_layers, torch.split(x, (1,) * shape[-1], -1)))]
         return torch.stack(embeddings, dim=-1)
 
 class TKAT(nn.Module):
     """ Temporal Kan Transformer """
-    def __init__(self, sequence_length: int, num_unknown_features: int, num_known_features: int, 
-                 num_embedding: int, num_hidden: int, num_heads: int, n_ahead: int, use_tkan: bool = True):        
+    def __init__(self, 
+                 sequence_length: int, 
+                 num_unknown_features: int, 
+                 num_known_features: int, 
+                 num_embedding: int, 
+                 num_hidden: int, 
+                 num_heads: int, 
+                 n_ahead: int, 
+                 use_tkan: bool = True
+    ):        
         super().__init__()
         self.sequence_length = sequence_length
         self.n_ahead = n_ahead
         
-        self.embedding_layer = EmbeddingLayer(num_embedding)
+        self.embedding_layer = EmbeddingLayer(sequence_length, num_hidden, num_embedding)
         self.vsn_past_features = VariableSelectionNetwork(num_hidden)
         self.vsn_future_features = VariableSelectionNetwork(num_hidden)
         
         self.encoder = RecurrentLayer(num_hidden, return_state=True, use_tkan=use_tkan)
         self.decoder = RecurrentLayer(num_hidden, return_state=False, use_tkan=use_tkan)
         
-        self.gate = Gate()
-        self.add_and_norm = AddAndNorm()
+        self.gate = Gate(num_hidden)
+        self.add_and_norm = AddAndNorm(num_hidden)
         self.grn = GRN(num_hidden)
         
         self.attention = nn.MultiheadAttention(num_hidden, num_heads, batch_first=True)
@@ -141,7 +154,7 @@ class TKAT(nn.Module):
         embedded_inputs = self.embedding_layer(x)
         
         past_features = embedded_inputs[:, :self.sequence_length, :, :]
-        future_features = embedded_inputs[:, self.sequence_length:, :, -x.size(-1):]
+        future_features = embedded_inputs[:, self.sequence_length:, :, -x.shape[-1]:]
         
         variable_selection_past = self.vsn_past_features(past_features)
         variable_selection_future = self.vsn_future_features(future_features)

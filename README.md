@@ -5,6 +5,13 @@ Since many recent KAN papers use a keras based codebase as their starting point,
 ## Included Models
 
 * KAN
-* TKAN
-^ TKAT
-* SigKAT
+* Efficient KAN
+* Fast KAN
+* Faster KAN
+* Gottlieb KAN
+* TKAN [TKAN: Temporal Kolmogorov-Arnold Networks](https://arxiv.org/abs/2405.07344)
+* TKAT
+* SigKAT [SigKAN: Signature-Weighted Kolmogorov-Arnold Networks for Time Series](https://arxiv.org/abs/2406.17890)
+* BSRBF KAN [BSRBF-KAN: A combination of B-splines and Radial Basic Functions in Kolmogorov-Arnold Networks](https://arxiv.org/abs/2406.11173)
+* Jacobi KAN
+* Cheby KAN
