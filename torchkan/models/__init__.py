@@ -10,3 +10,4 @@ from .faster_kan import FasterKAN
 from .gottlieb_kan import GottliebKAN
 from .jacobi_kan import JacobiKAN
 from .gr_kan import GRKAN, GRN
+from .relu_kan import ReLUKAN

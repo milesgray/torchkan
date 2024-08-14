@@ -12,11 +12,11 @@ class AddAndNorm(nn.Module):
         return self.norm_layer(x + y)
 
 class Gate(nn.Module):
-    def __init__(self, size):
+    def __init__(self, in_size, out_size=None):
         super().__init__()
-        self.size = size
-        self.dense_layer = nn.Linear(self.size, self.size)
-        self.gated_layer = nn.Linear(self.size, self.size)
+        self.size = (in_size, in_size) if out_size is None else (in_size, out_size)
+        self.dense_layer = nn.Linear(*self.size)
+        self.gated_layer = nn.Linear(*self.size)
 
     def forward(self, x):
         dense_output = self.dense_layer(x)

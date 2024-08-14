@@ -1,9 +1,11 @@
-""" https://github.com/SpaceLearner/JacobiKAN/blob/main/ChebyKANLayer.py """
+""" Various KAN layers"""
 import torch
 import torch.nn as nn
+import numpy as np
 
 # This is inspired by Kolmogorov-Arnold Networks but using Chebyshev polynomials instead of splines coefficients
 class ChebyKANLayer(nn.Module):
+    """ https://github.com/SpaceLearner/JacobiKAN/blob/main/ChebyKANLayer.py """
     def __init__(self, input_dim, output_dim, degree, norm=False):
         super().__init__()
         self.input_dim = input_dim
@@ -69,3 +71,53 @@ class JacobiKANLayer(nn.Module):
         if self.norm:
             y = self.norm(y)
         return y
+    
+
+class ReLUKANLayer(nn.Module):
+    """ https://github.com/quiqi/relu_kan/blob/main/torch_relu_kan.py """
+    def __init__(self, 
+                 input_size: int, 
+                 g: int, # phase_num
+                 k: int, # step
+                 output_size: int, 
+                 train_ab: bool = True):
+        super().__init__()
+        self.input_size, self.output_size = input_size, output_size
+        self.g, self.k  = g, k
+        
+        self.r = 4*g*g / ((k+1)*(k+1))        
+        phase_low = np.arange(-k, g) / g
+        phase_high = phase_low + (k+1) / g
+        self.phase_low = nn.Parameter(
+            torch.Tensor(
+                np.array(
+                    [phase_low for i in range(input_size)]
+                )
+            ), requires_grad=train_ab)
+        self.phase_high = nn.Parameter(
+            torch.Tensor(
+                np.array(
+                    [phase_high for i in range(input_size)]
+                )
+            ), requires_grad=train_ab)
+        self.conv = nn.Conv2d(1, output_size, (g+k, input_size))
+
+    def forward(self, x):
+        x1 = torch.relu(x - self.phase_low)
+        x2 = torch.relu(self.phase_high - x)
+        x = x1 * x2 * self.r
+        x = x * x
+        x = x.reshape((len(x), 1, self.g + self.k, self.input_size))
+        x = self.conv(x)
+        x = x.reshape((len(x), self.output_size, 1))
+        return x
+    
+    def show_base(self, x_dim=600, y_dim=1024):     
+        import matplotlib.pyplot as plt   
+        x = torch.Tensor([np.arange(-x_dim, y_dim+x_dim) / y_dim]).T
+        x1 = torch.relu(x - self.phase_low)
+        x2 = torch.relu(self.phase_high - x)
+        y = x1 * x1 * x2 * x2 * self.r * self.r
+        for i in range(self.g+self.k):
+            plt.plot(x, y[:, i:i+1].detach(), color='black')
+        plt.show()
