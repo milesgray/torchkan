@@ -89,12 +89,23 @@ def load_crypto(path="data.parquet"):
     df.columns = [c.replace(' quote asset volume', '') for c in df.columns]
     return df
 
-def generate(df, sequence_length, n_ahead = 1):
+def load_known_inputs(df, columns=['hour', 'dayofweek']):
+    return pd.DataFrame(
+        index=df.index, 
+        data=np.array([
+            df.reset_index()['group'].apply(lambda x: (x[c])).values
+            for c in columns
+            
+        ]).T, 
+        columns = ['hour', 'dayofweek'])
+
+def generate(df, sequence_length, n_ahead = 1, window=24*14):
     #Case without known inputs
-    scaler_df = df.copy().shift(n_ahead).rolling(24 * 14).median()
+    scaler_df = df.copy().shift(n_ahead).rolling(window).median()
     tmp_df = df.copy() / scaler_df
-    tmp_df = tmp_df.iloc[24 * 14 + n_ahead:].fillna(0.)
-    scaler_df = scaler_df.iloc[24 * 14 + n_ahead:].fillna(0.)
+    tmp_df = tmp_df.iloc[window + n_ahead:].fillna(0.)
+    scaler_df = scaler_df.iloc[window + n_ahead:].fillna(0.)
+
     def prepare_sequences(df, scaler_df, n_history, n_future):
         X, y, y_scaler = [], [], []
 
@@ -141,14 +152,15 @@ def generate_data_w_known_inputs(
         df: pd.DataFrame, 
         known_input_df: pd.DataFrame, 
         sequence_length: int, 
-        n_ahead: int = 1
+        n_ahead: int = 1,
+        window: int = 24*14
 ) -> tuple:
     #Case without known inputs - fill with 0 the unknown features future values in X
-    scaler_df = df.copy().shift(n_ahead).rolling(24 * 14).median()
+    scaler_df = df.copy().shift(n_ahead).rolling(window).median()
     tmp_df = df.copy() / scaler_df
-    tmp_df = tmp_df.iloc[24 * 14 + n_ahead:].fillna(0.)
-    scaler_df = scaler_df.iloc[24 * 14 + n_ahead:].fillna(0.)
-    tmp_known_input_df = known_input_df.iloc[24 * 14 + n_ahead:].copy()
+    tmp_df = tmp_df.iloc[window + n_ahead:].fillna(0.)
+    scaler_df = scaler_df.iloc[window + n_ahead:].fillna(0.)
+    tmp_known_input_df = known_input_df.iloc[window + n_ahead:].copy()
     
     def prepare_sequences(df, known_input_df, scaler_df, n_history, n_future):
         Xu, Xk, y, y_scaler = [], [], [], []
@@ -187,6 +199,7 @@ def generate_data_w_known_inputs(
     
     y_train = to_tensor(y_train.reshape(y_train.shape[0], -1))
     y_test = to_tensor(y_test.reshape(y_test.shape[0], -1))
+    
     return X_scaler, X_train, X_test, \
         X_train_unscaled, X_test_unscaled, \
             y_scaler, y_train, y_test, \

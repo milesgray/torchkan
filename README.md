@@ -1,8 +1,10 @@
 # Kolmogorov-Arnold Networks (KANs) Variants in pyTorch
 
-Since many recent KAN papers use a keras based codebase as their starting point, there is a lack of purely pytorch KAN mdoels.  This hopes to solve that.
+Since many recent KAN papers use a keras based codebase as their starting point, there is a lack of purely pytorch KAN mdoels.  This hopes to solve that, while I learn how these models work.
 
 ## Included Models
+
+Work in progress, don't expect any of them to work yet.
 
 * KAN
 * Efficient KAN
